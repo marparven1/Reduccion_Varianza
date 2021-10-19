@@ -1,0 +1,113 @@
+---
+title: "Integración de Montecarlo (Integral unidimensional)"
+output: html_document
+---
+
+```{r replicabilidad, include=FALSE}
+set.seed(457367)
+library(dplyr)
+```
+
+Consideremos la siguiente integral unidimensional:
+\[
+  I = \int_{0}^{1} (1 - x^{2})^{\frac{3}{2}} \mathop{}\!d x
+\]
+
+El método de Montecarlo nos permite estimar su valor.
+
+Estimaremos también el coste en tiempo del método haciendo uso de las herramientas proporcionadas por el paquete `bench` (en particular, la función `mark` analiza el coste en tiempo y en memoria de las expresiones proporcionadas, ejecutando cada una de ellas un cierto número de iteraciones y devolviendo una tabla con distintas medidas, entre ellas la mediana de los tiempos de ejecución de cada iteración). De esta forma, podremos estimar la eficiencia del método directo a la hora de estimar el valor de la integral.
+
+```{r Montecarlo-directo, warning=FALSE}
+genera_valor_aleatorio <- function() {
+  runif(1)
+}
+
+g <- function(x) {
+  (1 - x^2)^(3 / 2)
+}
+
+n <- 1e4
+coste_directo <- bench::mark({
+  valores_g <- replicate(n, {
+    x <- genera_valor_aleatorio()
+    g(x)
+  })
+},
+iterations = 10,
+time_unit = "ms"
+)$median
+
+estimacion_directo <- mean(valores_g)
+varianza_directo <- var(valores_g) / n
+
+eficiencia_directo <- 1 / (varianza_directo * coste_directo)
+```
+
+Los resultados obtenidos se encuentran en la tabla incluida al final del documento.
+
+A continuación vamos a aplicar el método de las variables antitéticas para tratar de reducir la varianza de la estimación.
+
+Si representamos gráficamente la función \( g \), podemos comprobar que es una función decreciente, por lo que el método de las variables antitéticas garantiza una reducción de varianza, aunque no que esta sea suficientemente grande.
+
+```{r grafica-g}
+library(ggplot2)
+
+ggplot2::ggplot() +
+  geom_function(fun = g) +
+  xlim(0, 1)
+```
+
+En primer lugar establecemos la forma de generar valores aleatorios antitéticos. Por otra parte, la definición actual de la función \( g \) la convierte en una función vectorizada, por lo que para aplicarla a cada valor basta con aplicarla al vector generado.
+
+# Método de las variables antitéticas
+
+```{r generacion}
+genera_valores_antiteticos <- function() {
+  u <- runif(1)
+  c(u, 1 - u)
+}
+```
+
+Ahora replicamos el proceso de generar valores antitéticos, aplicarles la función `g` a cada uno de ellos y calcular el promedio. Para que los resultados se puedan comparar con los del método directo, es necesario generar solo `n / 2` pares de valores antitéticos (para que se hayan generado `n` valores aleatorios en total). Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia a la hora de estimar el valor de la integral.
+
+```{r replicacion, warning=FALSE}
+coste_antiteticas <- bench::mark({ # para ver cuanto tarda
+  valores <- replicate(n / 2, {
+    valores_antiteticos <- genera_valores_antiteticos()
+    mean(g(valores_antiteticos))
+  })
+},
+iterations = 10,
+time_unit = "ms"
+)$median
+```
+
+Finalmente, estimamos el valor de la integral, la varianza de esa estimación y la eficiencia del método.
+
+No calculo IC ni nada porque aquí no me interesa, en el examen si tendremos que hacerlo.
+
+```{r estimacion}
+estimacion_antiteticas <- mean(valores)
+varianza_antiteticas <- var(valores) / (n / 2) # Cuasivar muestral
+eficiencia_antiteticas <- 1 / (varianza_antiteticas * coste_antiteticas)
+```
+
+La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método de las variables antitéticas.
+
+```{r tabla-de-resultados}
+knitr::kable(
+  data.frame(
+    `Método` = c("Directo", "Antitéticas"),
+    `Estimación` = c(estimacion_directo, estimacion_antiteticas),
+    Varianza = c(varianza_directo, varianza_antiteticas),
+    Coste = c(coste_directo, coste_antiteticas),
+    Eficiencia = c(eficiencia_directo, eficiencia_antiteticas)
+  ),
+  digits = 10 , booktabs=TRUE
+) %>%  kableExtra::kable_styling(latex_options = "striped")
+```
+
+Se puede observar cómo la varianza se reduce en un factor de \( 100 \), se reduce bastante, con solo un pequeño aumento del coste en tiempo. Esto quiere decir que el método de las variables antitéticas es mucho más eficiente que el método directo cuando se trata de estimar el valor de \( I \).
+
+Uniendo pasos uno y dos, mejora la eficiencia.
+
