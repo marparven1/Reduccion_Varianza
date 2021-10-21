@@ -74,7 +74,7 @@ Ahora replicamos el proceso de generar valores antitéticos, aplicarles la funci
 coste_antiteticas <- bench::mark({ # para ver cuanto tarda
   valores <- replicate(n / 2, {
     valores_antiteticos <- genera_valores_antiteticos()
-    mean(g(valores_antiteticos))
+    mean(g(valores_antiteticos)) # (xi + yi) / 2
   })
 },
 iterations = 10,

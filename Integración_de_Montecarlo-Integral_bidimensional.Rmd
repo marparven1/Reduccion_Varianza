@@ -1,0 +1,169 @@
+---
+title: "Integración de Montecarlo (Integral bidimensional)"
+output: html_document
+---
+
+```{r replicabilidad, include=FALSE}
+set.seed(457367)
+```
+
+Consideremos la siguiente integral bidimensional:
+\[
+  I =
+  \int_{1}^{4} \int_{2}^{7} \frac{x^{2}y}{3} \,dx \,dy =
+  \int_{0}^{1} \int_{0}^{1} \frac{(5 u_{1} + 2)^{2} (3 u_{2} + 1)}{3} 5\,du_{1}\,3\,du_{2} =
+  \int_{0}^{1} \int_{0}^{1} 5 (5 u_{1} + 2)^{2} (3 u_{2} + 1) \,du_{1} \,du_{2}
+\]
+
+Tenemos que generar la función g:
+
+\[
+g(0,1)^2 \rightarrow R , \quad g(u_1,u_2) = (5 u_{1} + 2)^{2} (3 u_{2} + 1)
+\]
+
+Esta función cumple las condiciones para poder resolverlo. *Mirar cuales eran y escribirlo todo*.
+
+# Método de Montecarlo directo
+
+El método de Montecarlo nos permite estimar su valor. Estimaremos también el coste en tiempo del método haciendo uso de las herramientas proporcionadas por el paquete `bench`. De esta forma, podremos estimar la eficiencia del método directo a la hora de estimar el valor de la integral.
+
+Pasos: 
+
+- Genero vectores aleatorios $u_1$ y $u_2$
+- Les apligo g
+- Hago la media
+
+```{r Montecarlo-directo, warning=FALSE}
+genera_vector_aleatorio <- function() {
+  runif(2)
+}
+
+
+# Función g
+g <- function(u) {
+  u_1 <- u[1]
+  u_2 <- u[2]
+  5 * (5 * u_1 + 2)^2 * (3 * u_2 + 1)
+}
+
+
+n <- 1e4
+coste_directo <- bench::mark({ # repito 10 veces las lineas 52-54
+  valores_g <- replicate(n, {
+    u <- genera_vector_aleatorio()
+    g(u)
+  })
+},
+iterations = 10,
+time_unit = "s" # segundos
+)$median # bench::mark me da mucha información, a mi únicamente me interesa el tiempo (median)
+
+estimacion_directo <- mean(valores_g) # media de valores de la décima iteración, la última
+varianza_directo <- var(valores_g) / n #cuasi / n_valores
+
+eficiencia_directo <- 1 / (varianza_directo * coste_directo)
+```
+
+```{r  Tabla-de-resultado-directo}
+knitr::kable(
+  data.frame(
+    `Método` = c("Directo"),
+    `Estimación` = c(estimacion_directo),
+    Varianza = c(varianza_directo),
+    Coste = c(coste_directo), 
+    Eficiencia = c(eficiencia_directo)
+    ),
+  digits = 10
+)
+```
+
+
+
+
+
+A continuación vamos a aplicar el método de las variables antitéticas para tratar de reducir la varianza de la estimación.
+
+
+# Método de variables antitéticas
+
+Es inmediato comprobar que la función \( g \) es creciente en cada uno de sus argumentos, por lo que el método de las variables antitéticas garantiza una reducción de varianza, aunque no que esta sea suficientemente grande.
+
+En primer lugar establecemos la forma de generar vectores aleatorios antitéticos. Por otra parte, para aplicar la función \( g \) a cada uno de esos vectores nos apoyaremos en la función `apply` básica de R.
+
+
+```{r generacion}
+genera_vectores_antiteticos <- function() { # ya no son valores, estamos en R2
+  u <- runif(2)
+  rbind(u, 1 - u) # Vector u y 1-u, lo pego por filas
+}
+```
+
+Ahora replicamos el proceso de generar vectores antitéticos, aplicarles la función `g` a cada uno de ellos y calcular el promedio. Para que los resultados se puedan comparar con los del método directo, es necesario generar solo `n / 2` pares de valores antitéticos (para que se hayan generado `n` valores aleatorios en total). Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia a la hora de estimar el valor de la integral.
+
+
+Tengo la matriz 
+\[
+\begin{equation}
+\left(
+\begin{matrix}
+u_1 & u_2\\
+1-u_1 & 1-u_2
+\end{matrix}
+\rigth)
+\end{equation}
+\]
+
+```{r replicacion, warning=FALSE}
+coste_antiteticas <- bench::mark({
+  valores <- replicate(n / 2, {
+    vectores_antiteticos <- genera_vectores_antiteticos() # genera la matriz
+    mean(apply(vectores_antiteticos, 1, g)) # por filas aplico g (a toda la fila)
+  })
+},
+iterations = 10,
+time_unit = "s"
+)$median
+```
+
+
+Finalmente, estimamos el valor de la integral, la varianza de esa estimación y la eficiencia del método.
+
+```{r estimacion}
+estimacion_antiteticas <- mean(valores)
+varianza_antiteticas <- var(valores) / (n / 2)
+eficiencia_antiteticas <- 1 / (varianza_antiteticas * coste_antiteticas)
+```
+
+```{r tabla-de-resultados-antiteticas}
+knitr::kable(
+  data.frame(
+    `Método` = c( "Antitéticas"),
+    `Estimación` = c(estimacion_antiteticas),
+    Varianza = c( varianza_antiteticas),
+    Coste = c( coste_antiteticas),
+    Eficiencia = c( eficiencia_antiteticas)
+  ),
+  digits = 10
+)
+```
+
+
+
+
+
+La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método de las variables antitéticas.
+
+```{r tabla-de-resultados}
+knitr::kable(
+  data.frame(
+    `Método` = c("Directo", "Antitéticas"),
+    `Estimación` = c(estimacion_directo, estimacion_antiteticas),
+    Varianza = c(varianza_directo, varianza_antiteticas),
+    Coste = c(coste_directo, coste_antiteticas),
+    Eficiencia = c(eficiencia_directo, eficiencia_antiteticas)
+  ),
+  digits = 10
+)
+```
+
+Se puede observar cómo la eficiencia del método de las variables antitéticas es comparable a la del método directo de Montecarlo, debido a que la reducción de varianza conseguida se ve anulada por el aumento del coste en tiempo.
