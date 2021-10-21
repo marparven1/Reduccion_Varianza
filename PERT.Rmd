@@ -1,0 +1,205 @@
+---
+title: "PERT"
+output: html_document
+---
+
+```{r reproducibilidad, include=FALSE}
+set.seed(443701)
+```
+
+Consideremos el proyecto de software descrito mediante el siguiente diagrama PERT, en el que los nodos representan las tareas a realizar y los ejes las dependencias entre ellas:
+
+```{r diagrama-PERT, echo=FALSE, message=FALSE}
+library(ggplot2)
+library(ggdag)
+
+dag <- dagitty::dagitty('dag {
+  1 [latent, pos="0, 0"]
+  2 [latent, pos=".5, .5"]
+  3 [latent, pos=".5, -.5"]
+  4 [latent, pos="1, 1"]
+  5 [latent, pos="1, .5"]
+  6 [latent, pos="1, 0"]
+  7 [latent, pos="1, -.5"]
+  8 [latent, pos="1, -1"]
+  9 [latent, pos="1.5, 0"]
+  10 [latent, pos="2, 0"]
+1 -> 2
+  1 -> 3
+  2 -> 4
+  2 -> 5
+  3 -> 6
+  3 -> 7
+  3 -> 8
+  4 -> 10
+  5 -> 9
+  6 -> 9
+  7 -> 9
+  8 -> 10
+  9 -> 10
+  }')
+
+dag %>%
+  tidy_dagitty() %>%
+  ggdag() +
+  labs(x = "", y = "") +
+  scale_x_continuous(breaks = NULL, limits = c(-.25, 2.25)) +
+  scale_y_continuous(breaks = NULL, limits = c(-1.25, 1.25))
+```
+
+El proyecto comienza en el instante \( 0 \). La tarea \( j \)-ésima comienza en el instante \( s_{j} \), dura \( t_{j} \) instantes de tiempo y termina en el instante \( e_{j} = s_{j} + t_{j} \). Cualquier tarea \( j \) sin dependencias comienza en \( s_{j} = 0 \). El instante de comienzo de una tarea con dependencias es el máximo de los instantes en los que terminan estas últimas. Por ejemplo, \( s_{4} = e_{2} \) y \( s_{9} = \max(e_{5}, e_{6}, e_{7}) \). El proyecto al completo termina en el instante \( e_{10} \).
+
+Las duraciones de las tareas son aleatorias, con \( t_{j} \sim \mathrm{Exp}(\lambda_{j}) \), siendo las siguientes las duraciones medias \( \frac{1}{\lambda_{j}} \) de cada tarea.
+
+```{r parametros}
+duraciones_medias_tareas_proyecto <- c(4, 4, 2, 5, 2, 3, 2, 3, 2, 2)
+```
+
+
+# Método directo de Montecarlo
+
+El método de Montecarlo nos permite estimar la duración total \( e_{10} \) del proyecto. Estimaremos también el coste en tiempo del método haciendo uso de las herramientas proporcionadas por el paquete `bench`. De esta forma, podremos estimar la eficiencia del método directo a la hora de estimar la duración del proyecto.
+
+
+
+Con Vectorize he hecho lo siguiente:
+
+- Vector \( \quad v <- c(x_1,x_2,\dots,x_n)\)
+- Tengo f(v)
+- Sea \(f' \leftarrow Vectorize(f)\)
+- Aplico la función f a cada elemento del vector de la siguiente forma: \(f'(v) =  c(f(x_1),f(x_2),\dots,f(x_n))\)
+
+
+
+
+```{r Montecarlo-directo, warning=FALSE}
+genera_duraciones_tareas <- function(duraciones_medias) { 
+  genera_duracion_tarea <- Vectorize(function(duracion_media) { # esta función es temporal, solo funciona cuando está funcionando genera_duraciones_tarea
+    rexp(1, rate = 1 / duracion_media) # genera valores aleatorios (1) según la exponencial
+  })
+  genera_duracion_tarea(duracion_media = duraciones_medias) # aplico esa función al vector con todas las duraciones medias
+}
+# Obtengo un vector con todas las duraciones medias que he generado
+
+calcula_duracion_proyecto <- function(t) { # según el grafo de dependencias
+  e_1 <- t[1]
+  e_2 <- e_1 + t[2]
+  e_3 <- e_1 + t[3]
+  e_4 <- e_2 + t[4]
+  e_5 <- e_2 + t[5]
+  e_6 <- e_3 + t[6]
+  e_7 <- e_3 + t[7]
+  e_8 <- e_3 + t[8]
+  e_9 <- max(e_5, e_6, e_7) + t[9]
+  max(e_4, e_8, e_9) + t[10]
+}
+
+
+# Genero muchos valores 
+n <- 1e3 # Genero mill, pero como luego lo repito 3 veces,...
+coste_directo <- bench::mark({
+  duraciones_proyecto <- replicate(n, {
+    duraciones_tareas <-
+      genera_duraciones_tareas(duraciones_medias_tareas_proyecto)
+    calcula_duracion_proyecto(duraciones_tareas)
+  })
+},
+iterations = 10,
+time_unit = "s"
+)$median
+
+estimacion_directo <- mean(duraciones_proyecto)
+varianza_directo <- var(duraciones_proyecto) / n
+
+eficiencia_directo <- 1 / (varianza_directo * coste_directo)
+```
+
+```{r tabla-de-resultados}
+knitr::kable(
+  data.frame(
+    `Método` = c("Directo"),#, "Antitéticas"),
+    `Estimación` = c(estimacion_directo),#, estimacion_antiteticas),
+    Varianza = c(varianza_directo),#, varianza_antiteticas),
+    Coste = c(coste_directo),#, coste_antiteticas),
+    Eficiencia = c(eficiencia_directo)#, eficiencia_antiteticas)
+  ),
+  digits = 10
+)
+```
+
+
+
+# Método de variables antitéticas
+
+Para poder aplicar el método de las variables antitéticas nos basaremos en el siguiente resultado, que nos permitirá trabajar con valores aleatorios uniformes para generar las duraciones de cada tarea:
+
+*Método de la transformada inversa*: sea \(F\) una función de distribución, tal que \(F(x)=P[X<x]\).
+Es necesario conocer la distribución para poder aplicar el método (en nuestro caso exponencial)
+
+1. La función \(F^{-1} : (0, 1) \rightarrow \mathbb{R}\) dada por
+\[
+  F^{-1} (u) = \inf \{x \mid F(x) \geq u\}
+\]
+está bien definida y se llama la inversa generalizada de \(F\).
+2. Sea \(U \sim \mathrm{U}(0, 1)\). Entonces la función de distribución de la variable aleatoria \(F^{-1} (U)\) es igual a la función \(F\).
+
+
+Hay una foto en mi movil del dibujo de distribuciones continuas y discretas (21/Octubre)
+En las discretas la inversa es en los saltos.
+
+
+La función que calcula la duración del proyecto a partir de la duración de cada una de las tareas es claramente creciente en cada uno de sus argumentos, ya que aumentar la duración de una de las tareas aumenta la duración total del proyecto. Como la inversa de una función de distribución es siempre no decreciente, el método de las variables antitéticas garantiza una reducción de varianza, aunque no que esta sea suficientemente grande.
+
+En primer lugar establecemos la forma de generar vectores aleatorios antitéticos. Por otra parte, para aplicar la función `calcula_duracion_proyecto` a cada uno de esos vectores nos apoyaremos en la función `apply` básica de R.
+
+```{r generacion}
+genera_duraciones_antiteticas <- function(duraciones_medias) {
+  genera_duracion_antitetica <- Vectorize(function(duracion_media) {
+    u <- runif(1)
+    c(qexp(u, rate = 1 / duracion_media),
+      qexp(1 - u, rate = 1 / duracion_media))
+  })
+  genera_duracion_antitetica(duraciones_medias)
+}
+
+```
+
+Ahora replicamos el proceso de generar duraciones antitéticas de las tareas, calcular las duraciones totales del proyecto a partir de ellas y calcular el promedio. Para que los resultados se puedan comparar con los del método directo, es necesario generar solo `n / 2` pares de valores antitéticos (para que se hayan generado `n` valores aleatorios en total). Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia.
+
+```{r replicacion, warning=FALSE}
+coste_antiteticas <- bench::mark({
+  valores <- replicate(n / 2, {
+    duraciones_antiteticas <-
+      genera_duraciones_antiteticas(duraciones_medias_tareas_proyecto)
+    mean(apply(duraciones_antiteticas, 1, calcula_duracion_proyecto))
+  })
+},
+iterations = 10,
+time_unit = "s"
+)$median
+```
+
+Finalmente, estimamos la duración del proyecto, la varianza de esa estimación y la eficiencia del método.
+
+```{r estimacion}
+estimacion_antiteticas <- mean(valores)
+varianza_antiteticas <- var(valores) / (n / 2)
+eficiencia_antiteticas <- 1 / (varianza_antiteticas * coste_antiteticas)
+```
+
+La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método de las variables antitéticas.
+
+```{r tabla-de-resultados}
+knitr::kable(
+  data.frame(
+    `Método` = c("Directo", "Antitéticas"),
+    `Estimación` = c(estimacion_directo, estimacion_antiteticas),
+    Varianza = c(varianza_directo, varianza_antiteticas),
+    Coste = c(coste_directo, coste_antiteticas),
+    Eficiencia = c(eficiencia_directo, eficiencia_antiteticas)
+  ),
+  digits = 10
+)
+```
+
+Se observa que el método de las variables antitéticas alcanza una eficiencia sensiblemente mayor que la del método directo de Montecarlo, debido a la reducción conseguida tanto de la varianza de la estimación como del coste en tiempo.

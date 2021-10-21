@@ -167,3 +167,8 @@ knitr::kable(
 ```
 
 Se puede observar cómo la eficiencia del método de las variables antitéticas es comparable a la del método directo de Montecarlo, debido a que la reducción de varianza conseguida se ve anulada por el aumento del coste en tiempo.
+
+
+
+
+Nota: Saltamos el péndulo con este método porque es sólo una intergal: HACER. Vamos al PERT
