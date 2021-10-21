@@ -1,0 +1,161 @@
+---
+title: "Cola en el banco"
+output: html_document
+params:
+  T_apertura: 300
+  tasa_llegada: 1
+  media_servicio: !r 45 / 60
+---
+
+```{r reproducibilidad, include=FALSE}
+set.seed(708446)
+```
+
+Consideremos una sucursal de un banco que cada día permanece abierta durante \( `r params$T_apertura` \) minutos. Supongamos que la sucursal solo tiene un oficinista, que los clientes llegan a la sucursal de acuerdo a un proceso de Poisson con una intensidad de \( `r params$tasa_llegada` \) por minuto y que cada cliente es atendido durante un tiempo aleatorio que tiene una distribución exponencial de media \( `r params$media_servicio` \) minutos.
+
+El método de Montecarlo nos permite estimar el promedio diario de clientes que esperarán más de cinco minutos a ser atendidos. Estimaremos también el coste en tiempo del método haciendo uso de las herramientas proporcionadas por el paquete `bench`. De esta forma, podremos estimar la eficiencia del método directo a la hora de resolver el problema planteado.
+
+```{r Montecarlo-directo, warning=FALSE}
+genera_llegada_y_atencion_de_clientes <-
+  function(T_apertura, tasa_llegada, media_servicio) {
+    tiempos_llegadas_y_servicios <-
+      numeric(length = 2 * 2 * tasa_llegada * T_apertura)
+    tiempo_total <- 0
+    i <- 1
+    repeat {
+      tiempo_entre_llegadas <- rexp(1, rate = tasa_llegada)
+      tiempo_servicio <- rexp(1, rate = 1 / media_servicio)
+      tiempos_llegadas_y_servicios[i] <- tiempo_entre_llegadas
+      tiempos_llegadas_y_servicios[i + 1] <- tiempo_servicio
+      i <- i + 2
+      tiempo_total <- tiempo_total + tiempo_entre_llegadas
+      if (tiempo_total >= T_apertura) {
+        break
+      }
+    }
+    tiempos_llegadas_y_servicios
+  }
+
+cuenta_cuantos_clientes_esperan_mucho <-
+  function(tiempos, T_apertura) {
+    if (length(tiempos) <= 2) {
+      0
+    } else {
+      numero_clientes_esperan_mucho <- 0
+      tiempo_total <- tiempos[1]
+      tiempo_de_espera <- 0
+      for (i in seq(3, length(tiempos), by = 2)) {
+        tiempo_total <- tiempo_total + tiempos[i]
+        if (tiempo_total >= T_apertura) {
+          break
+        }
+        tiempo_de_espera <- max(
+          tiempo_de_espera + tiempos[i - 1] - tiempos[i],
+          0
+        )
+        if (tiempo_de_espera > 5) {
+          numero_clientes_esperan_mucho <-
+            numero_clientes_esperan_mucho + 1
+        }
+      }
+      numero_clientes_esperan_mucho
+    }
+  }
+
+n <- 1e2
+coste_directo <- bench::mark({
+  valores_clientes_esperan_mucho <- replicate(n, {
+    tiempos_llegadas_y_servicios <-
+      do.call(genera_llegada_y_atencion_de_clientes, params)
+    cuenta_cuantos_clientes_esperan_mucho(tiempos_llegadas_y_servicios,
+                                          params$T_apertura)
+  })
+},
+iterations = 10,
+time_unit = "s"
+)$median
+
+estimacion_directo <- mean(valores_clientes_esperan_mucho)
+varianza_directo <- var(valores_clientes_esperan_mucho) / n
+
+eficiencia_directo <- 1 / (varianza_directo * coste_directo)
+```
+
+Los resultados obtenidos se encuentran en la tabla incluida al final del documento.
+
+La función que calcula el número de clientes que esperan más de cinco minutos a ser atendidos es creciente en cada uno de sus argumentos:
+
+* La recursión de Lindley muestra que si el tiempo de espera de un cliente aumenta o disminuye, lo mismo ocurre con el tiempo de espera de los clientes siguientes.
+* Si un cliente tarda más en llegar desde que llegó el cliente anterior, entonces esperará menos tiempo a ser atendido. En consecuencia, el número de clientes que esperan más de cinco minutos disminuirá.
+* Si a un cliente se tarda más en atenderle, entonces el cliente siguiente esperará más tiempo a ser atendido. En consecuencia, el número de clientes que esperan más de cinco minutos aumentará.
+
+Para poder aplicar el método de las variables antitéticas nos basaremos en el método de la transformada inversa. Aparece, sin embargo, una dificultad: si denotamos por \( g \) a la función que calcula el número de clientes que esperan más de cinco minutos a ser atendidos y por \( \mathbf{x}_{1} \) y \( \mathbf{x}_{2} \) las dos simulaciones a generar, para calcular \( \frac{g(\mathbf{x}_{1}) + g(\mathbf{x}_{2})}{2} \) debemos esperar a completar la generación tanto de \( \mathbf{x}_{1} \) como de \( \mathbf{x}_{2} \). Por tanto, debemos generar valores \( t_{1, i}, v_{1, i}, t_{2, i}, v_{2, i} \) para \( i = 1, \dotsc, \max(m_{1}, m_{2}) \), con \( m_{1} = M(\mathbf{x}_{1}) \) y \( m_{2} = M(\mathbf{x}_{2}) \), pero luego calcular \( g(t_{1, 1}, v_{1, 1}, \dotsc, t_{1, m_{1}}, v_{1, m_{1}}) \) y \( g(t_{2, 1}, v_{2, 1}, \dotsc, t_{2, m_{2}}, v_{2, m_{2}}) \).
+
+En primer lugar establecemos la forma de generar vectores aleatorios antitéticos.
+
+```{r generacion}
+genera_llegada_y_atencion_de_clientes <-
+  function(T_apertura, tasa_llegada, media_servicio) {
+    tiempos_llegadas_y_servicios <-
+      matrix(nrow = 2,
+             ncol = 2 * 2 * tasa_llegada * T_apertura)
+    tiempos_totales <- c(0, 0)
+    i <- 1
+    repeat {
+      u <- runif(1)
+      tiempos_entre_llegadas <- qexp(c(u, 1 - u), rate = tasa_llegada)
+      v <- runif(1)
+      tiempos_servicio <- qexp(c(v, 1 - v), rate = 1 / media_servicio)
+      tiempos_llegadas_y_servicios[, i] <- tiempos_entre_llegadas
+      tiempos_llegadas_y_servicios[, i + 1] <- tiempos_servicio
+      i <- i + 2
+      tiempos_totales <- tiempos_totales + tiempos_entre_llegadas
+      if (all(tiempos_totales >= T_apertura)) {
+        break
+      }
+    }
+    tiempos_llegadas_y_servicios
+  }
+```
+
+Ahora replicamos el proceso de generar flujos antitéticas de clientes, calcular cuántos de estos esperan más de cinco minutos a ser atendidos y calcular el promedio. Para que los resultados se puedan comparar con los del método directo, es necesario generar solo `n / 2` pares de valores antitéticos (para que se hayan generado `n` valores aleatorios en total). Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia.
+
+```{r replicacion, warning=FALSE}
+coste_antiteticas <- bench::mark({
+  valores <- replicate(n / 2, {
+    tiempos_antiteticos <-
+      do.call(genera_llegada_y_atencion_de_clientes, params)
+    mean(apply(tiempos_antiteticos, 1,
+               cuenta_cuantos_clientes_esperan_mucho,
+               params$T_apertura))
+  })
+},
+iterations = 10,
+time_unit = "s"
+)$median
+```
+
+Finalmente, estimamos el valor pedido, la varianza de esa estimación y la eficiencia del método.
+
+```{r estimacion}
+estimacion_antiteticas <- mean(valores)
+varianza_antiteticas <- var(valores) / (n / 2)
+eficiencia_antiteticas <- 1 / (varianza_antiteticas * coste_antiteticas)
+```
+
+La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método de las variables antitéticas.
+
+```{r tabla-de-resultados}
+knitr::kable(
+  data.frame(
+    `Método` = c("Directo", "Antitéticas"),
+    `Estimación` = c(estimacion_directo, estimacion_antiteticas),
+    Varianza = c(varianza_directo, varianza_antiteticas),
+    Coste = c(coste_directo, coste_antiteticas),
+    Eficiencia = c(eficiencia_directo, eficiencia_antiteticas)
+  ),
+  digits = 10
+)
+```
+
+Se observa que el método de las variables antitéticas alcanza una eficiencia solo ligeramente mayor que la del método directo de Montecarlo, y ello es debido únicamente a la reducción de la varianza de la estimación, ya que el coste en tiempo de ambos métodos es equiparable.
