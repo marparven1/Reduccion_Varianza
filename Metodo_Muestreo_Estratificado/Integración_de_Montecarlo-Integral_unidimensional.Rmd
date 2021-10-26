@@ -1,0 +1,227 @@
+---
+title: "Integración de Montecarlo (Integral unidimensional)"
+output: html_document
+---
+
+```{r replicabilidad, include=FALSE}
+set.seed(457367)
+```
+
+Consideremos la siguiente integral unidimensional:
+\[
+  I = \int_{0}^{1} (1 - x^{2})^{\frac{3}{2}} \mathop{}\!d x
+\]
+
+El método de Montecarlo nos permite estimar su valor.
+
+Estimaremos también el coste en tiempo del método haciendo uso de las herramientas proporcionadas por el paquete `bench` (en particular, la función `mark` analiza el coste en tiempo y en memoria de las expresiones proporcionadas, ejecutando cada una de ellas un cierto número de iteraciones y devolviendo una tabla con distintas medidas, entre ellas la mediana de los tiempos de ejecución de cada iteración). De esta forma, podremos estimar la eficiencia del método directo a la hora de estimar el valor de la integral.
+
+```{r Montecarlo-directo, warning=FALSE}
+genera_valor_aleatorio <- function() {
+  runif(1)
+}
+
+g <- function(x) {
+  (1 - x^2)^(3 / 2)
+}
+
+unidad_de_tiempo <- "ms"
+
+n <- 1e4
+coste_directo <- bench::mark({
+  valores_g <- replicate(n, {
+    x <- genera_valor_aleatorio()
+    g(x)
+  })
+},
+iterations = 10,
+time_unit = unidad_de_tiempo
+)$median
+
+estimacion_directo <- mean(valores_g)
+varianza_directo <- var(valores_g) / n
+
+eficiencia_directo <- 1 / (varianza_directo * coste_directo)
+```
+
+Los resultados obtenidos se encuentran en la tabla incluida al final del documento.
+
+A continuación vamos a aplicar el método del muestreo estratificado para tratar de reducir la varianza de la estimación.
+
+La representación gráfica de la función \( g \) muestra que unos estratos adecuados podrían ser los subintervalos \( (0, 1/4) \) y \( (1/4, 1) \).
+
+```{r grafica-g}
+library(ggplot2)
+
+ggplot2::ggplot() +
+  geom_function(fun = g) +
+  xlim(0, 1)
+```
+
+
+# Muestreo estratificado: muestreo proporcional
+
+En primer lugar definimos los estratos y establecemos la forma de generar valores aleatorios dentro de cada estrato.
+
+```{r generacion}
+estratos <- data.frame(min = c(0, 1 / 4),
+                       max = c(1 / 4, 1),
+                       probabilidad = c(1 / 4, 3 / 4))
+
+genera_valor_en_estrato <- function(numero_estrato) {
+  estrato <- estratos[numero_estrato,]
+  runif(1, min = estrato$min, max = estrato$max)
+}
+```
+
+Ahora replicamos el proceso de generar valores en cada estrato, en una cantidad proporcional a su probabilidad, y aplicarles la función `g` a cada uno de ellos. Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia a la hora de estimar el valor de la integral.
+
+```{r replicacion-proporcional, warning=FALSE}
+n_estratos <- n * estratos$probabilidad
+
+# Aseguramos valores enteros
+n_estratos <- ceiling(n_estratos)
+
+# Aseguramos al menos dos valores en cada estrato
+n_estratos <- pmax(n_estratos, 2)
+
+coste_estratificado_proporcional <- bench::mark({
+  valores <- lapply(seq_len(2), # la q se encarga de hacerlo dos veces sin copiarlo dos veces para el primer número y el segundo es lapply
+                    function(numero_estrato) {
+                      replicate(n_estratos[numero_estrato], {
+                        x <- genera_valor_en_estrato(numero_estrato)
+                        g(x)
+                      })
+                    })
+},
+iterations = 10,
+time_unit = unidad_de_tiempo
+)$median
+```
+
+
+
+
+
+
+
+
+
+Mirando la lista valores observo que en el primer estrato los valores están cercanos a 1, ya que en el estrato seleccionado la función toma valores próximos a uno y en el segundo no.
+
+
+
+
+```{r  warning=FALSE}
+sapply(valores,var)
+```
+
+Tiene sentido que sea 100 veces menos la cuasi del primer estrato que la del segundo, por la forma de la función g.
+
+
+
+
+Se han generado \( `r n_estratos[1]` \) valores en el primer estrato y \( `r n_estratos[2]` \) valores en el segundo estrato.
+
+Finalmente, estimamos el valor de la integral, la varianza de esa estimación y la eficiencia del método.
+
+```{r estimacion-proporcional}
+estimacion_estratificado_proporcional <-
+  weighted.mean(sapply(valores, mean),
+                estratos$probabilidad)
+varianza_estratificado_proporcional <-
+  sum(estratos$probabilidad^2 * sapply(valores, var) / n_estratos)
+eficiencia_estratificado_proporcional <-
+  1 / (varianza_estratificado_proporcional *
+         coste_estratificado_proporcional)
+```
+
+
+# Muestreo estratificado: muestreo óptimo
+
+Consideramos los mismos estratos que antes y, por tanto, la misma forma de generar valores en cada uno de ellos.
+
+Ahora replicamos el proceso de generar en cada estrato una cantidad óptima de valores, determinada mediante un procedimiento en dos etapas, y aplicarles la función `g` a cada uno de ellos. Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia a la hora de estimar el valor de la integral.
+
+```{r replicacion-optimo, warning=FALSE}
+n_tanteo <- 100
+n_produccion <- n - n_tanteo  # Para que la cantidad total de valores
+                              # generados sea igual en los tres métodos
+                              # y, por tanto, su comparación tenga sentido
+
+coste_estratificado_optimo <- bench::mark({
+  # Estimación de las varianzas de los estratos
+  n_estratos <- pmax(ceiling(n_tanteo * estratos$probabilidad),
+                     2)
+  valores <- lapply(seq_len(2),
+                    function(numero_estrato) {
+                      replicate(n_estratos[numero_estrato], {
+                        x <- genera_valor_en_estrato(numero_estrato)
+                        g(x)
+                      })
+                    })
+
+  # Cantidad óptima de valores en cada estrato
+  sigmas <- sapply(valores, sd)
+  n_estratos <-
+    pmax(ceiling(n_produccion * estratos$probabilidad * sigmas /
+                   sum(estratos$probabilidad * sigmas)),
+         2)
+
+  # Generación de valores en cada estrato
+  valores <- lapply(seq_len(2),
+                    function(numero_estrato) {
+                      replicate(n_estratos[numero_estrato], {
+                        x <- genera_valor_en_estrato(numero_estrato)
+                        g(x)
+                      })
+                    })
+},
+iterations = 10,
+time_unit = unidad_de_tiempo
+)$median
+```
+
+Se han generado \( `r n_estratos[1]` \) valores en el primer estrato y \( `r n_estratos[2]` \) valores en el segundo estrato.
+
+Finalmente, estimamos el valor de la integral, la varianza de esa estimación y la eficiencia del método.
+
+```{r estimacion-optimo}
+estimacion_estratificado_optimo <-
+  weighted.mean(sapply(valores, mean),
+                estratos$probabilidad)
+varianza_estratificado_optimo <-
+  sum(estratos$probabilidad^2 * sapply(valores, var) / n_estratos)
+eficiencia_estratificado_optimo <-
+  1 / (varianza_estratificado_optimo *
+         coste_estratificado_optimo)
+```
+
+La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método del muestreo estratificado.
+
+```{r tabla-de-resultados}
+knitr::kable(
+  data.frame(
+    `Método` = c("Directo",
+                 "Estratificado proporcional",
+                 "Estratificado óptimo"),
+    `Estimación` = c(estimacion_directo,
+                     estimacion_estratificado_proporcional,
+                     estimacion_estratificado_optimo),
+    Varianza = c(varianza_directo,
+                 varianza_estratificado_proporcional,
+                 varianza_estratificado_optimo),
+    Coste = c(coste_directo,
+              coste_estratificado_proporcional,
+              coste_estratificado_optimo),
+    Eficiencia = c(eficiencia_directo,
+                   eficiencia_estratificado_proporcional,
+                   eficiencia_estratificado_optimo)
+  ),
+  digits = 10
+)
+```
+
+Para este problema, la eficiencia del método del muestreo estratificado es mucho menor que la del método directo, ya que la reducción de varianza conseguida es anulada completamente por el aumento del coste en tiempo.
+
+

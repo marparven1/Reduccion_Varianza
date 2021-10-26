@@ -1,6 +1,12 @@
 ---
 title: "Cola en el banco"
-output: html_document
+output:
+  prettydoc::html_pretty:
+    theme: leonids
+    highlight: github
+    toc: true
+    toc_depth: 2
+    
 params:
   T_apertura: 300
   tasa_llegada: 1
@@ -14,6 +20,8 @@ set.seed(708446)
 Consideremos una sucursal de un banco que cada día permanece abierta durante \( `r params$T_apertura` \) minutos. Supongamos que la sucursal solo tiene un oficinista, que los clientes llegan a la sucursal de acuerdo a un proceso de Poisson con una intensidad de \( `r params$tasa_llegada` \) por minuto y que cada cliente es atendido durante un tiempo aleatorio que tiene una distribución exponencial de media \( `r params$media_servicio` \) minutos.
 
 El método de Montecarlo nos permite estimar el promedio diario de clientes que esperarán más de cinco minutos a ser atendidos. Estimaremos también el coste en tiempo del método haciendo uso de las herramientas proporcionadas por el paquete `bench`. De esta forma, podremos estimar la eficiencia del método directo a la hora de resolver el problema planteado.
+
+# Método de Montecarlo directo
 
 ```{r Montecarlo-directo, warning=FALSE}
 genera_llegada_y_atencion_de_clientes <-
@@ -89,9 +97,16 @@ La función que calcula el número de clientes que esperan más de cinco minutos
 * Si un cliente tarda más en llegar desde que llegó el cliente anterior, entonces esperará menos tiempo a ser atendido. En consecuencia, el número de clientes que esperan más de cinco minutos disminuirá.
 * Si a un cliente se tarda más en atenderle, entonces el cliente siguiente esperará más tiempo a ser atendido. En consecuencia, el número de clientes que esperan más de cinco minutos aumentará.
 
+
+# Método de las variables antitéticas
+
 Para poder aplicar el método de las variables antitéticas nos basaremos en el método de la transformada inversa. Aparece, sin embargo, una dificultad: si denotamos por \( g \) a la función que calcula el número de clientes que esperan más de cinco minutos a ser atendidos y por \( \mathbf{x}_{1} \) y \( \mathbf{x}_{2} \) las dos simulaciones a generar, para calcular \( \frac{g(\mathbf{x}_{1}) + g(\mathbf{x}_{2})}{2} \) debemos esperar a completar la generación tanto de \( \mathbf{x}_{1} \) como de \( \mathbf{x}_{2} \). Por tanto, debemos generar valores \( t_{1, i}, v_{1, i}, t_{2, i}, v_{2, i} \) para \( i = 1, \dotsc, \max(m_{1}, m_{2}) \), con \( m_{1} = M(\mathbf{x}_{1}) \) y \( m_{2} = M(\mathbf{x}_{2}) \), pero luego calcular \( g(t_{1, 1}, v_{1, 1}, \dotsc, t_{1, m_{1}}, v_{1, m_{1}}) \) y \( g(t_{2, 1}, v_{2, 1}, \dotsc, t_{2, m_{2}}, v_{2, m_{2}}) \).
 
 En primer lugar establecemos la forma de generar vectores aleatorios antitéticos.
+
+
+
+## Generación
 
 ```{r generacion}
 genera_llegada_y_atencion_de_clientes <-
@@ -120,6 +135,8 @@ genera_llegada_y_atencion_de_clientes <-
 
 Ahora replicamos el proceso de generar flujos antitéticas de clientes, calcular cuántos de estos esperan más de cinco minutos a ser atendidos y calcular el promedio. Para que los resultados se puedan comparar con los del método directo, es necesario generar solo `n / 2` pares de valores antitéticos (para que se hayan generado `n` valores aleatorios en total). Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia.
 
+## Replicación
+
 ```{r replicacion, warning=FALSE}
 coste_antiteticas <- bench::mark({
   valores <- replicate(n / 2, {
@@ -137,6 +154,8 @@ time_unit = "s"
 
 Finalmente, estimamos el valor pedido, la varianza de esa estimación y la eficiencia del método.
 
+## Estimación
+
 ```{r estimacion}
 estimacion_antiteticas <- mean(valores)
 varianza_antiteticas <- var(valores) / (n / 2)
@@ -144,6 +163,9 @@ eficiencia_antiteticas <- 1 / (varianza_antiteticas * coste_antiteticas)
 ```
 
 La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método de las variables antitéticas.
+
+# Resultados
+
 
 ```{r tabla-de-resultados}
 knitr::kable(
