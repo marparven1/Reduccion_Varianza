@@ -1,0 +1,146 @@
+---
+title: "Integración de Montecarlo (Integral unidimensional)"
+output: html_document
+---
+
+```{r replicabilidad, include=FALSE}
+set.seed(457367)
+```
+
+Consideremos la siguiente integral unidimensional:
+\[
+  I = \int_{0}^{1} (1 - x^{2})^{\frac{3}{2}} \mathop{}\!d x
+\]
+
+El método de Montecarlo nos permite estimar su valor.
+
+Estimaremos también el coste en tiempo del método haciendo uso de las herramientas proporcionadas por el paquete `bench` (en particular, la función `mark` analiza el coste en tiempo y en memoria de las expresiones proporcionadas, ejecutando cada una de ellas un cierto número de iteraciones y devolviendo una tabla con distintas medidas, entre ellas la mediana de los tiempos de ejecución de cada iteración). De esta forma, podremos estimar la eficiencia del método directo a la hora de estimar el valor de la integral.
+
+```{r Montecarlo-directo, warning=FALSE}
+genera_valor_aleatorio <- function() {
+  runif(1)
+}
+
+g <- function(x) {
+  (1 - x^2)^(3 / 2)
+}
+
+unidad_de_tiempo <- "ms"
+
+n <- 1e4
+coste_directo <- bench::mark(
+  {
+    valores_g <- replicate(n, {
+      x <- genera_valor_aleatorio()
+      g(x)
+    })
+  },
+  iterations = 10,
+  time_unit = unidad_de_tiempo
+)$median
+
+estimacion_directo <- mean(valores_g)
+varianza_directo <- var(valores_g) / n
+
+eficiencia_directo <- 1 / (varianza_directo * coste_directo)
+```
+
+Los resultados obtenidos se encuentran en la tabla incluida al final del documento.
+
+A continuación vamos a aplicar el método del muestreo por importancia para tratar de reducir la varianza de la estimación.
+
+Buscamos una densidad instrumental con soporte al menos en el intervalo \( (0, 1) \) y que sea lo más parecida posible a la función \( |g(x)| f_{1}(x) \), donde \( f_{1} \) es la densidad de \( \mathrm{U}(0, 1) \). Puesto que la función de densidad de una distribución beta de parámetros \( \alpha \) y \( \beta \) es \( f_2(x) \propto x^{\alpha - 1} (1 - x)^{\beta - 1} \), con soporte en \( (0, 1) \), parece conveniente usar como densidad instrumental la de una distribución beta con \( \alpha = 1 \) y \( \beta = \frac{3}{2} + 1 = \frac{5}{2} \).
+
+```{r gráfica-importancia}
+library(ggplot2)
+
+alfa <- 1
+beta <- 5 / 2
+ggplot(data.frame()) +
+  geom_function(fun = g, aes(colour = "g")) +
+  geom_function(fun = dunif, aes(colour = "unif")) +
+  geom_function(
+    fun = dbeta,
+    args = list(shape1 = alfa, shape2 = beta),
+    aes(colour = "beta")
+  ) +
+  scale_colour_manual("",
+    values = c(g = "black", unif = "blue", beta = "red"),
+    breaks = c("g", "unif", "beta")
+  ) +
+  xlim(0, 1)
+```
+
+En primer lugar, establecemos la forma de generar valores aleatorios, que ahora será a partir de la distribución beta escogida. Por otra parte, el producto de \( g \) por la razón de verosimilitud (es decir, el cociente entre la función de densidad de la distribución uniforme y la función de densidad de la distribución beta escogida) es el siguiente:
+\begin{equation*}
+  g(x) \frac{1}{\frac{x^{1 - 1} (1 - x)^{5/2 - 1}}{B(1, 5/2)}}
+  = B(1, 5/2) \Biggl( \frac{1 - x^{2}}{1 - x} \Biggr)^{3/2}
+  = \frac{\Gamma(1) \Gamma(5/2)}{\Gamma(7/2)} (1 + x)^{3/2}
+  = \frac{2}{5} (1 + x)^{3/2}
+\end{equation*}
+(en la primera igualdad se ha usado que \( B(\alpha, \beta) = \frac{\Gamma(\alpha) \Gamma(\beta)}{\Gamma(\alpha + \beta)} \) y en la última igualdad se han usado las propiedades \( \Gamma(1) = 1 \) y \( \Gamma(z) = \frac{\Gamma(z + 1)}{z} \)).
+
+```{r generacion}
+genera_valor_aleatorio <- function() {
+  rbeta(1, shape1 = alfa, shape2 = beta)
+}
+
+g_por_verosimilitud <- function(x) {
+  (2 / 5) * (1 + x)^(3 / 2)
+}
+```
+
+A continuación, replicamos `n` veces el proceso de generación de valores. Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia a la hora de estimar el valor de la integral.
+
+```{r replicacion, warning=FALSE}
+coste_importancia <- bench::mark(
+  {
+    valores <- replicate(n, {
+      x <- genera_valor_aleatorio()
+      g_por_verosimilitud(x)
+    })
+  },
+  iterations = 10,
+  time_unit = unidad_de_tiempo
+)$median
+```
+
+Finalmente, estimamos el valor de la integral, la varianza de esa estimación y la eficiencia del método.
+
+```{r estimacion}
+estimacion_importancia <- mean(valores)
+varianza_importancia <- var(valores) / n
+eficiencia_importancia <- 1 / (varianza_importancia * coste_importancia)
+```
+
+La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método del muestreo por importancia.
+
+```{r tabla-de-resultados}
+knitr::kable(
+  data.frame(
+    `Método` = c(
+      "Directo",
+      "Importancia"
+    ),
+    `Estimación` = c(
+      estimacion_directo,
+      estimacion_importancia
+    ),
+    Varianza = c(
+      varianza_directo,
+      varianza_importancia
+    ),
+    Coste = c(
+      coste_directo,
+      coste_importancia
+    ),
+    Eficiencia = c(
+      eficiencia_directo,
+      eficiencia_importancia
+    )
+  ),
+  digits = 10
+)
+```
+
+Se puede observar cómo la varianza se reduce en un factor de \( 5 \), con solo un pequeño aumento del coste en tiempo. Esto quiere decir que, escogiendo una densidad instrumental adecuada, el método del muestreo por importancia es más eficiente que el método directo cuando se trata de estimar el valor de \( I \).

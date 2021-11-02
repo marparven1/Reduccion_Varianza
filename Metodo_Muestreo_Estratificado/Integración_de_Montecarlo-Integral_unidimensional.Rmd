@@ -54,9 +54,15 @@ La representación gráfica de la función \( g \) muestra que unos estratos ade
 library(ggplot2)
 
 ggplot2::ggplot() +
-  geom_function(fun = g) +
+  geom_function(fun = g, aes(colour="g")) +
+  geom_function(fun = dunif, aes(colour="unif")) +
+  scale_colour_manual("",
+                      values=c(g="black",unif="blue"),
+                               breaks=c("g","unif"))+
   xlim(0, 1)
 ```
+
+La azul es la densidad de una uniforme U(0,1)
 
 
 # Muestreo estratificado: muestreo proporcional
@@ -143,17 +149,23 @@ Consideramos los mismos estratos que antes y, por tanto, la misma forma de gener
 
 Ahora replicamos el proceso de generar en cada estrato una cantidad óptima de valores, determinada mediante un procedimiento en dos etapas, y aplicarles la función `g` a cada uno de ellos. Haremos también uso del paquete `bench` para estimar el coste en tiempo del método, para poder así estimar su eficiencia a la hora de estimar el valor de la integral.
 
+
+
 ```{r replicacion-optimo, warning=FALSE}
-n_tanteo <- 100
+
+
+n_tanteo <- 100 # luego estos 100 valores los reparto de manera proporcional entre estratos
 n_produccion <- n - n_tanteo  # Para que la cantidad total de valores
                               # generados sea igual en los tres métodos
                               # y, por tanto, su comparación tenga sentido
 
+
+## Etapa 1 (estimación de sigma)
 coste_estratificado_optimo <- bench::mark({
   # Estimación de las varianzas de los estratos
-  n_estratos <- pmax(ceiling(n_tanteo * estratos$probabilidad),
-                     2)
-  valores <- lapply(seq_len(2),
+  n_estratos <- pmax(ceiling(n_tanteo * estratos$probabilidad), # aseguro que son enteros         
+                      2) # al menos hay dos 
+  valores <- lapply(seq_len(2), # lista con la cantidad de valores generados para cada estrato (25,75)
                     function(numero_estrato) {
                       replicate(n_estratos[numero_estrato], {
                         x <- genera_valor_en_estrato(numero_estrato)
@@ -162,13 +174,15 @@ coste_estratificado_optimo <- bench::mark({
                     })
 
   # Cantidad óptima de valores en cada estrato
-  sigmas <- sapply(valores, sd)
+  sigmas <- sapply(valores, sd) # para obtener la estimación de la var en cada estrato
   n_estratos <-
     pmax(ceiling(n_produccion * estratos$probabilidad * sigmas /
                    sum(estratos$probabilidad * sigmas)),
          2)
 
-  # Generación de valores en cada estrato
+  
+  ## Etapa 2 (estimación de sigma con asignación óptima)
+  # Hacemos lo mismo, Generación de valores en cada estrato pero con la asignación óptima en n_estratos
   valores <- lapply(seq_len(2),
                     function(numero_estrato) {
                       replicate(n_estratos[numero_estrato], {
@@ -196,6 +210,9 @@ eficiencia_estratificado_optimo <-
   1 / (varianza_estratificado_optimo *
          coste_estratificado_optimo)
 ```
+
+
+# Tabla comparativa
 
 La siguiente tabla compara los resultados obtenidos por el método directo de Montecarlo y por el método del muestreo estratificado.
 
